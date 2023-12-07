@@ -1,0 +1,1 @@
+( ap-description  :name "25.56.95.135:1099/JADE" :ap-services (set))
