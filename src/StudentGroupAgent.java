@@ -7,8 +7,8 @@ import org.json.simple.JSONObject;
 import utilities.DFUtilities;
 
 import java.io.IOException;
-import java.util.AbstractMap.SimpleEntry;
 import java.util.*;
+import java.util.AbstractMap.SimpleEntry;
 
 public class StudentGroupAgent extends Agent {
     public StudentGroup model;
@@ -306,6 +306,7 @@ class StudentGroupBehaviour extends SimpleBehaviour {
                 msg.setConversationId("transferLesson");
                 msg.setContentObject(myMsg);
                 this.myAgent.send(msg);
+
             } else {
                 print("Есть пересечение " + selected);
                 // шлем запрос
@@ -469,8 +470,8 @@ class StudentGroupBehaviour extends SimpleBehaviour {
             var subject = obj.get(3);
             var type = Integer.parseInt(obj.get(4));
 
-            print("Добавлен " + (step <= 3 ? "преподаватель " : "аудитория ")  + teacherOrAuditorium + " на " + day +" " + lesson);
-
+            print("Преподаватель " + teacherOrAuditorium + " согласен(согласна) на перенос на " + day + " " + lesson +
+                    ". Перенос предмета " + subject + " типа " + (type == LessonType.LECTURE ? "лекция" : "практика"));
             var occupation = model.timeTable.get(day).get(lesson);
             if (step <= 3) {
                 occupation.teacher = teacherOrAuditorium;
@@ -555,23 +556,16 @@ class StudentGroupBehaviour extends SimpleBehaviour {
         print("Синхронизация");
         // синхронизация
         var flag = true;
-        var startTime = System.currentTimeMillis();
         while (flag) {
             // разные типы, т.к. перерегистрация работает через снятие регистрации
             var readyGroups = DFUtilities.searchService(myAgent, "groupExchangeReady" + (step == 2 ? "" : "2"));
             var allGroups = DFUtilities.searchService(myAgent, "group");
-            if (readyGroups.length >= allGroups.length || System.currentTimeMillis() - startTime > 60000) {
+            if (readyGroups.length >= allGroups.length) {
                 flag = false;
             } else {
                 try { Thread.sleep(1000); }
                 catch(InterruptedException ex) { Thread.currentThread().interrupt(); }
             }
-        }
-        if (System.currentTimeMillis() - startTime > 10000) {
-            print("Синхронизация не завершилась в течение 60 секунд. Прерываем операцию.");
-            // Добавим обработку нехватки аудиторий для групп и предметов
-            handleAuditoriumShortage();
-            return;
         }
 
         print("Синхронизация завершена");
@@ -585,69 +579,13 @@ class StudentGroupBehaviour extends SimpleBehaviour {
         iterationExchange();
     }
 
-    // Добавим метод для отправки сообщения серверу о группах и предметах, где не хватило аудиторий
-    void handleAuditoriumShortage() throws IOException {
-        var groupsWithShortage = getGroupsWithAuditoriumShortage();
-        var subjectsWithShortage = getSubjectsWithAuditoriumShortage();
-
-        for (var group : groupsWithShortage) {
-            sendAuditoriumShortageMessage(Collections.singleton(group), null);
-        }
-
-        for (var subject : subjectsWithShortage) {
-            sendAuditoriumShortageMessage(null, Collections.singleton(subject));
-        }
-    }
-
-    // Добавим методы для получения групп и предметов, где не хватило аудиторий
-    Set<String> getGroupsWithAuditoriumShortage() {
-        var groups = DFUtilities.searchService(myAgent, "group");
-        var readyGroups = DFUtilities.searchService(myAgent, "groupExchangeReady" + (step == 2 ? "" : "2"));
-
-        var result = new HashSet<String>();
-        for (AID group : groups) {
-            if (Arrays.stream(readyGroups).noneMatch(ready -> group.getName().equals(ready.getName()))) {
-                result.add(group.getName());
-            }
-        }
-        return result;
-    }
-
-    Set<String> getSubjectsWithAuditoriumShortage() {
-        var remainingSubjects = step <= 3
-                ? model.getRemainingLessonsForTeacher()
-                : model.getRemainingLessonsForAuditorium();
-
-        var result = new HashSet<String>();
-        for (Lesson subject : remainingSubjects) {
-            if (!askedSubjects.contains(subject.name)) {
-                result.add(subject.name);
-            }
-        }
-        return result;
-    }
-
-    void sendAuditoriumShortageMessage(Set<String> groups, Set<String> subjects) throws IOException {
-        var mes = new ACLMessage();
-        mes.addReceiver(client);
-        mes.setContent(model.name);
-
-        var shortageInfo = new JSONObject();
-        shortageInfo.put("groups", groups);
-        shortageInfo.put("subjects", subjects);
-
-        mes.setContent(shortageInfo.toJSONString());
-        mes.setConversationId("AUDITORIUM_SHORTAGE");
-        mes.setPerformative(ACLMessage.INFORM);
-        myAgent.send(mes);
-    }
-
     void iterationExchange() throws IOException {
+        System.out.println("=== iterationExchange ===");
         var nextSub = getFirstRemainingLesson();
         if (nextSub.isPresent()) {
             var available = getAvailableWithoutDropped(true);
             if (!available.isEmpty()) {
-
+                System.out.println("Available lessons: " + available.size());
                 var obj = new ArrayList<String>(3);
                 obj.add(available.get(0).getKey().toString());
                 obj.add(available.get(0).getValue().toString());
@@ -655,21 +593,56 @@ class StudentGroupBehaviour extends SimpleBehaviour {
                 body.subject = nextSub.get();
 
                 // какая группа
-                var mes = new ACLMessage();
-                mes.addReceiver(step <= 3
+                var receiverAID = step <= 3
                         ? getNextTeacher(nextSub.get())
-                        : getNextAuditorium(nextSub.get()));
+                        : getNextAuditorium(nextSub.get());
+
+                var mes = new ACLMessage();
+                mes.addReceiver(receiverAID);
                 mes.setConversationId("available");
                 mes.setContentObject(body);
                 this.myAgent.send(mes);
+                System.out.println("Начало обмена с агентом: " + receiverAID.getName());
             } else {
+                System.out.println("No available lessons");
                 print("Обмен не продолжился, свободных занятий нет");
+                if (!hasUnaskedAuditorium()) {
+                    // Если нет свободных аудиторий, отправляем сообщение серверу
+                    sendNoAvailableAuditoriumMessage();
+                }
                 startSync();
             }
         } else {
+            System.out.println("No remaining lessons");
             print("Обмен не продолжился, предметы все заполнены");
+            sendNoRemainingLessonsMessage();
             startSync();
         }
+    }
+    boolean hasUnaskedAuditorium() {
+        var allAuditoriums = DFUtilities.searchService(myAgent, "auditorium");
+        return askedTeachersAuditoriums.size() < allAuditoriums.length;
+    }
+
+    void sendNoAvailableAuditoriumMessage() throws IOException {
+        // Отправляем сообщение серверу о том, что нет свободных аудиторий для некоторых групп и предметов
+        print("Закончились свободные аудитории");
+        var mes = new ACLMessage();
+        mes.addReceiver(client);
+        mes.setContent(model.name);
+        mes.setConversationId("NO_AVAILABLE_AUDITORIUM");
+        mes.setPerformative(ACLMessage.CANCEL);
+        myAgent.send(mes);
+    }
+
+    void sendNoRemainingLessonsMessage() throws IOException {
+        // Отправляем сообщение серверу о том, что закончились предметы для обмена
+        var mes = new ACLMessage();
+        mes.addReceiver(client);
+        mes.setContent(model.name);
+        mes.setConversationId("NO_REMAINING_LESSONS");
+        mes.setPerformative(ACLMessage.CANCEL);
+        myAgent.send(mes);
     }
 
     AID getNextTeacher(Lesson subject) {

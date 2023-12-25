@@ -211,6 +211,11 @@ class ClientBehaviour extends SimpleBehaviour {
                         allRequest("SYNC_GROUP");
                     }
                 }
+
+                // Добавим обработку ситуации, когда не поступило ни одного сообщения, чтобы избежать зависания
+                if (resultRequest == null && syncRequest == null) {
+                    block(); // Заблокируем текущий поведенческий блок и подождем, пока не поступит новое сообщение
+                }
             }
             case 3 -> {
                 var resultRequest = this.myAgent.receive(this.resultTemplate);

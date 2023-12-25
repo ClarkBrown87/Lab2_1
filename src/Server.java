@@ -208,17 +208,37 @@ class ServerBehaviour extends SimpleBehaviour {
 
         Output("Запрос результатов у " + teachers.length + " преподавателей и " + auditoriums.length + " аудиторий");
 
-        var mes = new ACLMessage();
-        mes.setConversationId("TIMETABLE_TEACHER");
+        var mesTeacher = new ACLMessage();
+        mesTeacher.setConversationId("TIMETABLE_TEACHER");
         for (AID teacher : teachers) {
-            mes.addReceiver(teacher);
+            mesTeacher.addReceiver(teacher);
         }
-        this.myAgent.send(mes);
+        this.myAgent.send(mesTeacher);
 
-        mes.clearAllReceiver();
-        mes.setConversationId("TIMETABLE_AUDITORIUM");
+        var mesAuditorium = new ACLMessage();
+        mesAuditorium.setConversationId("TIMETABLE_AUDITORIUM");
         for (AID auditorium : auditoriums) {
-            mes.addReceiver(auditorium);
+            mesAuditorium.addReceiver(auditorium);
+        }
+        this.myAgent.send(mesAuditorium);
+
+        // Добавленный код: Проверяем, если нет свободных аудиторий для текущей группы
+        if (teachers.length == 0 && auditoriums.length == 0) {
+            Output("Расписание не заполнено, нет свободных аудиторий для групп");
+            sendNoAvailableAuditoriums();
+            Container.Kill(myAgent);
+            this.step = 0;
+        }
+    }
+    void sendNoAvailableAuditoriums() {
+        var mes = new ACLMessage();
+        mes.setConversationId("NO_AVAILABLE_AUDITORIUMS");
+
+        // Добавьте в сообщение информацию о группах и предметах, для которых не хватило аудиторий
+
+        var clients = DFUtilities.searchService(this.myAgent, "client");
+        for (AID client : clients) {
+            mes.addReceiver(client);
         }
         this.myAgent.send(mes);
     }
